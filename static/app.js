@@ -20,7 +20,7 @@ function Masthead(props) {
       ),
       e("span", null,
         e("span", { className: "dot " + (h.database ? "on" : "warn") }),
-        h.database ? "Database connected" : "No database, duplicates checked against Humanity"
+        h.database ? "Database connected, duplicates tracked" : "No database, duplicate detection is unreliable"
       )
     )
   );
