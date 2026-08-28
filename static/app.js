@@ -130,6 +130,74 @@ function Row(props) {
   );
 }
 
+
+function Diagnostics(props) {
+  var d = props.diag;
+  return e("div", { className: "panel" },
+    e("h2", null, "3. What Humanity is telling us"),
+    e("div", { className: "actions", style: { marginTop: 0, marginBottom: "14px" } },
+      e("button", { onClick: props.onRun, disabled: props.busy },
+        props.busy ? "Checking" : "Check leave type endpoints"),
+      e("button", { onClick: props.onPayloads, disabled: !props.hasFile },
+        "Show what we would send")
+    ),
+    d ? e("div", { className: "ledger" },
+      (d.results || []).map(function (r, i) {
+        var kind = r.ok && r.count ? "create" : (r.status === 200 ? "skip" : "failed");
+        return e("div", { className: "rowitem " + kind, key: i },
+          e("div", { className: "rowhead" },
+            e("span", { className: "who" }, "GET " + r.path),
+            e("span", { className: "tag " + kind },
+              r.status === null ? "no response" : String(r.status))
+          ),
+          e("div", { className: "meta" },
+            r.ok ? (r.count + " records parsed") : (r.error || "nothing usable")
+          ),
+          r.sample && r.sample.length
+            ? e("pre", { className: "raw" }, JSON.stringify(r.sample, null, 1))
+            : (r.raw ? e("pre", { className: "raw" }, r.raw) : null)
+        );
+      })
+    ) : e("div", { className: "empty" },
+        "Run the check to see which path your account answers on."),
+    d && d.winner
+      ? e("div", { className: "warn", style: { marginTop: "12px" } },
+          "\u2713 " + d.winner + " works. Set HUMANITY_LEAVETYPE_PATH to " + d.winner +
+          " in Render to pin it.")
+      : null,
+    props.payloads
+      ? e("div", { style: { marginTop: "18px" } },
+          e("h2", null, "Exact form data we would post"),
+          e("pre", { className: "raw" }, JSON.stringify(props.payloads, null, 1))
+        )
+      : null
+  );
+}
+
+
+function JobcodeMapper(props) {
+  if (!props.unmapped || !props.unmapped.length) return null;
+  return e("div", { className: "panel" },
+    e("h2", null, "Map these jobcodes"),
+    e("div", { className: "meta", style: { marginBottom: "12px" } },
+      "These came from the CSV and have no leave type yet. Pick one for each."),
+    props.unmapped.map(function (code) {
+      return e("div", { className: "fixrow", key: code },
+        e("span", { className: "who", style: { minWidth: "110px" } }, code),
+        e("select", {
+          value: props.overrides[code.toLowerCase()] || "",
+          onChange: function (ev) { props.onPick(code, ev.target.value); }
+        },
+          e("option", { value: "" }, "Pick a Humanity leave type"),
+          (props.leaveTypes || []).map(function (t) {
+            return e("option", { key: t.id, value: t.id }, t.name + " (" + t.id + ")");
+          })
+        )
+      );
+    })
+  );
+}
+
 function App() {
   var s0 = useState(null); var health = s0[0], setHealth = s0[1];
   var s1 = useState(null); var file = s1[0], setFile = s1[1];
@@ -140,6 +208,15 @@ function App() {
   var s6 = useState(false); var busy = s6[0], setBusy = s6[1];
   var s7 = useState(true); var includePending = s7[0], setIncludePending = s7[1];
   var s8 = useState(false); var previewed = s8[0], setPreviewed = s8[1];
+  var s9 = useState([]); var leaveTypes = s9[0], setLeaveTypes = s9[1];
+  var s10 = useState([]); var unmapped = s10[0], setUnmapped = s10[1];
+  var s11 = useState({}); var overrides = s11[0], setOverrides = s11[1];
+  var s12 = useState(null); var diag = s12[0], setDiag = s12[1];
+  var s13 = useState(false); var diagBusy = s13[0], setDiagBusy = s13[1];
+  var s14 = useState(null); var payloads = s14[0], setPayloads = s14[1];
+
+  var overrideRef = useRef({});
+  overrideRef.current = overrides;
 
   useEffect(function () {
     fetch("/api/health").then(function (r) { return r.json(); }).then(setHealth).catch(function () {});
@@ -163,12 +240,15 @@ function App() {
     setBusy(true); setError(""); setItems([]);
     var form = new FormData();
     form.append("file", target);
+    form.append("leavetype_overrides", JSON.stringify(overrideRef.current));
     fetch("/api/preview", { method: "POST", body: form })
       .then(function (r) { return r.json(); })
       .then(function (d) {
         if (!d.ok) { setError(d.error); return; }
         setItems(d.items);
         setCounts(d.counts);
+        setLeaveTypes(d.leave_types || []);
+        setUnmapped(d.unmapped_jobcodes || []);
         setPreviewed(true);
       })
       .catch(function (err) { setError(String(err)); })
@@ -181,6 +261,7 @@ function App() {
     var form = new FormData();
     form.append("file", file);
     form.append("include_pending", includePending ? "1" : "0");
+    form.append("leavetype_overrides", JSON.stringify(overrideRef.current));
 
     fetch("/api/import", { method: "POST", body: form }).then(function (resp) {
       if (!resp.ok) {
@@ -214,6 +295,34 @@ function App() {
       setError(String(err.message || err));
       setBusy(false);
     });
+  }
+
+  function runDiagnostics() {
+    setDiagBusy(true);
+    fetch("/api/debug/leavetypes")
+      .then(function (r) { return r.json(); })
+      .then(function (d) { setDiag(d); })
+      .catch(function (err) { setError(String(err)); })
+      .finally(function () { setDiagBusy(false); });
+  }
+
+  function showPayloads() {
+    if (!file) return;
+    var form = new FormData();
+    form.append("file", file);
+    form.append("leavetype_overrides", JSON.stringify(overrideRef.current));
+    fetch("/api/debug/payload", { method: "POST", body: form })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { setPayloads(d.ok ? d.payloads : null); if (!d.ok) setError(d.error); })
+      .catch(function (err) { setError(String(err)); });
+  }
+
+  function setOverride(jobcode, typeId) {
+    var next = Object.assign({}, overrides);
+    next[jobcode.toLowerCase()] = typeId;
+    setOverrides(next);
+    overrideRef.current = next;
+    runPreview();
   }
 
   function saveMapping(item, employeeId) {
@@ -262,6 +371,13 @@ function App() {
       error ? e("div", { className: "err" }, error) : null
     ),
 
+    e(JobcodeMapper, {
+      unmapped: unmapped,
+      leaveTypes: leaveTypes,
+      overrides: overrides,
+      onPick: setOverride
+    }),
+
     e("div", { className: "panel" },
       e("h2", null, "2. What happens to each row"),
       e(Tally, { counts: counts }),
@@ -272,7 +388,16 @@ function App() {
             })
           )
         : e("div", { className: "empty" }, "Drop a file above to see the plan.")
-    )
+    ),
+
+    e(Diagnostics, {
+      diag: diag,
+      busy: diagBusy,
+      hasFile: !!file,
+      payloads: payloads,
+      onRun: runDiagnostics,
+      onPayloads: showPayloads
+    })
   );
 }
 
