@@ -58,12 +58,26 @@ def read_upload():
     return raw
 
 
-def analyze(raw):
+def parse_overrides():
+    """Jobcode to leave type picks sent from the browser for this request."""
+    raw = request.form.get("leavetype_overrides", "")
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return {}
+    return {str(k).strip().lower(): str(v) for k, v in data.items() if v}
+
+
+def analyze(raw, leavetype_overrides=None):
     rows, headers = matcher.parse_csv(raw)
     roster = get_roster()
-    overrides = db.load_employee_overrides()
-    index = matcher.EmployeeIndex(roster, overrides)
+    employee_overrides = db.load_employee_overrides()
+    index = matcher.EmployeeIndex(roster, employee_overrides)
     leavetype_map, leave_types = build_leavetype_map()
+    if leavetype_overrides:
+        leavetype_map.update(leavetype_overrides)
 
     items = [matcher.classify(row, index, leavetype_map) for row in rows]
 
@@ -174,7 +188,7 @@ def preview():
     """Dry run. Reads the file, resolves everything, writes nothing."""
     try:
         raw = read_upload()
-        items, headers, leave_types = analyze(raw)
+        items, headers, leave_types = analyze(raw, parse_overrides())
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
     except Exception as exc:
@@ -182,8 +196,12 @@ def preview():
         return jsonify({"ok": False, "error": str(exc)}), 502
 
     counts = {}
+    unmapped = []
     for item in items:
         counts[item["action"]] = counts.get(item["action"], 0) + 1
+        if item["action"] == "skip" and item["leavetype_id"] is None and item["jobcode"]:
+            if item["jobcode"] not in unmapped:
+                unmapped.append(item["jobcode"])
     return jsonify(
         {
             "ok": True,
@@ -191,6 +209,7 @@ def preview():
             "items": items,
             "counts": counts,
             "leave_types": leave_types,
+            "unmapped_jobcodes": unmapped,
         }
     )
 
@@ -201,7 +220,7 @@ def do_import():
     try:
         raw = read_upload()
         include_pending = request.form.get("include_pending", "1") == "1"
-        items, _, _ = analyze(raw)
+        items, _, _ = analyze(raw, parse_overrides())
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
     except Exception as exc:
@@ -314,6 +333,69 @@ def map_leavetype():
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 502
     return jsonify({"ok": True})
+
+
+@app.get("/api/debug/leavetypes")
+def debug_leavetypes():
+    """Probe every candidate path and report what each one actually returns."""
+    results = [humanity.probe(p) for p in humanity.LEAVE_TYPE_PATHS]
+    winner = None
+    for r in results:
+        if r["ok"] and r["count"]:
+            winner = r["path"]
+            break
+    return jsonify({"ok": True, "results": results, "winner": winner})
+
+
+@app.get("/api/debug/probe")
+def debug_probe():
+    """Hit any path you like, so you can see the raw shape yourself."""
+    path = request.args.get("path", "").strip()
+    if not path.startswith("/"):
+        return jsonify({"ok": False, "error": "Path must start with a slash."}), 400
+    return jsonify({"ok": True, "result": humanity.probe(path)})
+
+
+@app.post("/api/debug/payload")
+def debug_payload():
+    """Show the exact form data that would be posted for each row. Writes nothing."""
+    try:
+        raw = read_upload()
+        items, _, _ = analyze(raw, parse_overrides())
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 502
+
+    out = []
+    for item in items:
+        if item["action"] not in ("create", "update"):
+            out.append({"row": item["name"], "date": item["local_date"], "would_send": None,
+                        "reason": item["reason"]})
+            continue
+        create_form = {
+            "employee": item["employee_id"],
+            "leavetype": item["leavetype_id"],
+            "start_date": item["local_date"],
+            "end_date": item["local_date"],
+            "is_hourly": "true" if item["is_hourly"] else "false",
+        }
+        if item["is_hourly"]:
+            create_form["start_time"] = item["start_time"]
+            create_form["end_time"] = item["end_time"]
+        out.append(
+            {
+                "row": item["name"],
+                "date": item["local_date"],
+                "method": "POST /leaves (form data)",
+                "would_send": create_form,
+                "then": {
+                    "method": "PUT /leaves/{new_id} (form data)",
+                    "body": {"unique_id": item["unique_id"], "status": item["status"]},
+                },
+            }
+        )
+    return jsonify({"ok": True, "payloads": out})
 
 
 @app.get("/api/history")
