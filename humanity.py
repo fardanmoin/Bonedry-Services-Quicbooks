@@ -238,50 +238,81 @@ def fetch_leave_types():
 
 
 def derive_leave_types_from_leaves():
-    """Fallback: read existing leave records and pull the distinct types out.
+    """Read existing leave records and pull the distinct leave types out.
 
-    Less clean than a dedicated endpoint, but it gives real ids and names
-    straight from the account, which is what the mapping actually needs.
+    v2 exposes no leave type list endpoint, so the records themselves are the
+    source. Real field names on a record are leave_type and leave_type_name.
     """
-    try:
-        rows = get("/leaves", {"start_date": "2015-01-01", "end_date": "2035-12-31"})
-    except HumanityError:
-        return []
-
+    rows = _fetch_leaves_raw()
     found = {}
     for row in rows:
-        type_id = row.get("leavetype") or row.get("leave_type") or row.get("type")
+        type_id = row.get("leave_type") or row.get("leavetype") or row.get("type")
         name = ""
         if isinstance(type_id, dict):
-            name = type_id.get("name") or type_id.get("title") or ""
+            name = type_id.get("name") or ""
             type_id = type_id.get("id")
         if type_id is None:
             continue
-        name = (name or row.get("leavetype_name") or row.get("type_name")
-                or row.get("leavetypename") or "")
+        name = (name or row.get("leave_type_name") or row.get("leavetype_name")
+                or row.get("type_name") or "")
         key = str(type_id)
         if key not in found or (name and not found[key]):
             found[key] = str(name)
-    return [{"id": k, "name": v or ("Leave type " + k)} for k, v in sorted(found.items())]
+
+    name_counts = {}
+    for value in found.values():
+        if value:
+            name_counts[value] = name_counts.get(value, 0) + 1
+
+    out = []
+    for key, value in sorted(found.items()):
+        label = value or ("Leave type " + key)
+        if value and name_counts.get(value, 0) > 1:
+            # Two ids share a name, usually one live and one archived. Flag it
+            # rather than picking, since the wrong one drains the wrong balance.
+            label = "%s (id %s, duplicate name)" % (label, key)
+        out.append({"id": key, "name": label})
+    return out
+
+
+def _fetch_leaves_raw():
+    """Every leave record, all statuses, over a wide window.
+
+    /leaves silently applies a default date window and returns 200 with an
+    empty list without one. It also appears to return approved records only,
+    so pending and rejected are requested explicitly and merged by id.
+    """
+    wide = {"start_date": "2015-01-01", "end_date": "2035-12-31"}
+    collected = {}
+    for params in (dict(wide), dict(wide, status="0"), dict(wide, status="-1")):
+        try:
+            for row in get("/leaves", params):
+                row_id = str(row.get("id") or "")
+                if row_id:
+                    collected[row_id] = row
+        except HumanityError:
+            continue
+    return list(collected.values())
 
 
 def fetch_leaves(start_date, end_date):
-    """Existing leaves in a date window, used to dedupe when there is no database.
+    """Existing leaves in a window, used to dedupe when there is no database.
 
-    Humanity has a habit of ignoring query filters on list endpoints, so the
-    window is filtered again in Python rather than trusted.
+    Field names come straight off real records: employee, leave_type, and
+    start_timestamp / end_timestamp as "YYYY-MM-DD HH:MM:SS".
     """
-    rows = get("/leaves", {"start_date": start_date, "end_date": end_date})
     out = []
-    for row in rows:
-        employee = row.get("employee") or row.get("employee_id") or row.get("user")
+    for row in _fetch_leaves_raw():
+        if row.get("deleted_at"):
+            continue
+        employee = row.get("employee") or row.get("user")
         if isinstance(employee, dict):
             employee = employee.get("id")
-        leavetype = row.get("leavetype") or row.get("leave_type") or row.get("type")
+        leavetype = row.get("leave_type") or row.get("leavetype")
         if isinstance(leavetype, dict):
             leavetype = leavetype.get("id")
-        start = str(row.get("start_date") or row.get("start") or "")[:10]
-        end = str(row.get("end_date") or row.get("end") or start)[:10]
+        start = str(row.get("start_timestamp") or row.get("start_date") or "")[:10]
+        end = str(row.get("end_timestamp") or row.get("end_date") or start)[:10]
         if not start:
             continue
         if end < start_date or start > end_date:
@@ -294,9 +325,11 @@ def fetch_leaves(start_date, end_date):
                 "start_date": start,
                 "end_date": end,
                 "status": row.get("status"),
+                "unique_id": row.get("unique_id"),
             }
         )
     return out
+
 
 
 def create_leave(employee_id, leavetype_id, start_date, end_date, is_hourly=False,
