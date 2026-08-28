@@ -435,6 +435,67 @@ def debug_leaves_params():
     return jsonify({"ok": True, "results": results})
 
 
+@app.get("/api/debug/dedupe")
+def debug_dedupe():
+    """Show exactly what the duplicate check sees for a date window.
+
+    Raw record count, what survives parsing, and the keys the check compares
+    against. If a leave exists in Humanity but does not show here, the parse
+    is dropping it.
+    """
+    start = request.args.get("start", "2026-08-25")
+    end = request.args.get("end", "2026-08-30")
+
+    try:
+        raw = humanity._fetch_leaves_raw()
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 502
+
+    parsed = humanity.fetch_leaves(start, end)
+
+    # Anything in the raw set that mentions this window, before filtering
+    near = []
+    for row in raw:
+        start_ts = str(row.get("start_timestamp") or "")[:10]
+        end_ts = str(row.get("end_timestamp") or "")[:10]
+        if start_ts >= start and start_ts <= end:
+            near.append(
+                {
+                    "id": row.get("id"),
+                    "employee": row.get("employee"),
+                    "employee_name": row.get("employee_name"),
+                    "leave_type": row.get("leave_type"),
+                    "leave_type_name": row.get("leave_type_name"),
+                    "start_timestamp": row.get("start_timestamp"),
+                    "end_timestamp": row.get("end_timestamp"),
+                    "status": row.get("status"),
+                    "deleted_at": row.get("deleted_at"),
+                    "unique_id": row.get("unique_id"),
+                }
+            )
+
+    keys = []
+    for leave in parsed:
+        cursor = leave["start_date"]
+        stop = leave["end_date"] or leave["start_date"]
+        guard = 0
+        while cursor <= stop and guard < 400:
+            keys.append("%s|%s|%s" % (leave["employee"], leave["leavetype"], cursor))
+            cursor = _next_day(cursor)
+            guard += 1
+
+    return jsonify(
+        {
+            "ok": True,
+            "window": {"start": start, "end": end},
+            "raw_total": len(raw),
+            "raw_in_window": near,
+            "parsed_in_window": parsed,
+            "dedupe_keys": sorted(set(keys)),
+        }
+    )
+
+
 @app.get("/api/debug/probe")
 def debug_probe():
     """Hit any path you like, so you can see the raw shape yourself."""
