@@ -127,16 +127,63 @@ def fetch_employees():
     return out
 
 
-LEAVE_TYPE_PATHS = ["/leaves/types", "/leavetypes", "/leaves/leavetypes"]
+LEAVE_TYPE_PATHS = [
+    "/leavetypes",
+    "/leaves/types",
+    "/leave/types",
+    "/leaves/leavetypes",
+    "/company/leavetypes",
+    "/settings/leavetypes",
+    "/leaves/types/list",
+]
+
+
+def probe(path, params=None):
+    """Raw call used by the diagnostics panel. Never raises, always reports."""
+    result = {"path": path, "status": None, "ok": False, "error": None,
+              "count": None, "sample": None, "raw": None}
+    try:
+        merged = _params()
+        if params:
+            merged.update(params)
+        resp = requests.get(
+            BASE_URL + path, headers=_headers(), params=merged, timeout=TIMEOUT
+        )
+    except Exception as exc:
+        result["error"] = str(exc)
+        return result
+
+    result["status"] = resp.status_code
+    body = resp.text or ""
+    result["raw"] = body[:1200]
+    if resp.status_code != 200:
+        return result
+    try:
+        payload = resp.json()
+    except ValueError:
+        result["error"] = "Body was not JSON."
+        return result
+
+    rows = _normalize(payload)
+    result["ok"] = True
+    result["count"] = len(rows)
+    result["sample"] = rows[:3]
+    return result
+
+
+
+LEAVE_TYPE_PATH_OVERRIDE = os.environ.get("HUMANITY_LEAVETYPE_PATH", "").strip()
 
 
 def fetch_leave_types():
     """Humanity has moved this path between releases, so try the known ones.
 
+    Set HUMANITY_LEAVETYPE_PATH to pin the one your account actually uses.
     Returns a list of {id, name}. Raises only if every path fails.
     """
     last_error = None
-    for path in LEAVE_TYPE_PATHS:
+    paths = ([LEAVE_TYPE_PATH_OVERRIDE] if LEAVE_TYPE_PATH_OVERRIDE else []) + LEAVE_TYPE_PATHS
+    for path in paths:
         try:
             rows = get(path)
         except HumanityError as exc:
@@ -144,10 +191,13 @@ def fetch_leave_types():
             continue
         out = []
         for row in rows:
-            type_id = row.get("id") or row.get("leavetype")
+            type_id = (row.get("id") or row.get("leavetype") or row.get("leavetype_id")
+                       or row.get("type_id"))
             if type_id is None:
                 continue
-            out.append({"id": str(type_id), "name": row.get("name") or row.get("title") or ""})
+            name = (row.get("name") or row.get("title") or row.get("leavetype_name")
+                    or row.get("label") or "")
+            out.append({"id": str(type_id), "name": str(name)})
         if out:
             return out
     raise HumanityError(
