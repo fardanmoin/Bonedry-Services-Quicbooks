@@ -139,7 +139,9 @@ function Diagnostics(props) {
       e("button", { onClick: props.onRun, disabled: props.busy },
         props.busy ? "Checking" : "Check leave type endpoints"),
       e("button", { onClick: props.onPayloads, disabled: !props.hasFile },
-        "Show what we would send")
+        "Show what we would send"),
+      e("button", { onClick: props.onLeaveParams, disabled: props.paramsBusy },
+        props.paramsBusy ? "Testing" : "Find pending leaves")
     ),
     d ? e("div", { className: "ledger" },
       (d.results || []).map(function (r, i) {
@@ -190,6 +192,12 @@ function Diagnostics(props) {
       ? e("div", { className: "warn", style: { marginTop: "12px" } },
           "\u2713 " + d.winner + " works. Set HUMANITY_LEAVETYPE_PATH to " + d.winner +
           " in Render to pin it.")
+      : null,
+    props.leaveParams
+      ? e("div", { style: { marginTop: "18px" } },
+          e("h2", null, "Which parameters return pending leaves"),
+          e("pre", { className: "raw" }, JSON.stringify(props.leaveParams, null, 1))
+        )
       : null,
     props.payloads
       ? e("div", { style: { marginTop: "18px" } },
@@ -249,6 +257,8 @@ function App() {
   var s12 = useState(null); var diag = s12[0], setDiag = s12[1];
   var s13 = useState(false); var diagBusy = s13[0], setDiagBusy = s13[1];
   var s14 = useState(null); var payloads = s14[0], setPayloads = s14[1];
+  var s15 = useState(null); var leaveParams = s15[0], setLeaveParams = s15[1];
+  var s16 = useState(false); var paramsBusy = s16[0], setParamsBusy = s16[1];
 
   var overrideRef = useRef({});
   overrideRef.current = overrides;
@@ -344,6 +354,15 @@ function App() {
       .finally(function () { setDiagBusy(false); });
   }
 
+  function findPendingParams() {
+    setParamsBusy(true);
+    fetch("/api/debug/leaves-params")
+      .then(function (r) { return r.json(); })
+      .then(function (d) { setLeaveParams(d.results || d); })
+      .catch(function (err) { setError(String(err)); })
+      .finally(function () { setParamsBusy(false); });
+  }
+
   function showPayloads() {
     if (!file) return;
     var form = new FormData();
@@ -434,7 +453,10 @@ function App() {
       hasFile: !!file,
       payloads: payloads,
       onRun: runDiagnostics,
-      onPayloads: showPayloads
+      onPayloads: showPayloads,
+      onLeaveParams: findPendingParams,
+      leaveParams: leaveParams,
+      paramsBusy: paramsBusy
     })
   );
 }
