@@ -19,8 +19,8 @@ function Masthead(props) {
         h.humanity_token ? "Humanity token loaded" : "Humanity token missing"
       ),
       e("span", null,
-        e("span", { className: "dot " + (h.database ? "on" : "off") }),
-        h.database ? "Neon connected" : "Neon not configured, reruns will duplicate"
+        e("span", { className: "dot " + (h.database ? "on" : "warn") }),
+        h.database ? "Database connected" : "No database, duplicates checked against Humanity"
       )
     )
   );
