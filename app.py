@@ -344,7 +344,25 @@ def debug_leavetypes():
         if r["ok"] and r["count"]:
             winner = r["path"]
             break
-    return jsonify({"ok": True, "results": results, "winner": winner})
+
+    explore = []
+    derived = []
+    if not winner:
+        explore = [humanity.probe(p) for p in humanity.EXPLORE_PATHS]
+        try:
+            derived = humanity.derive_leave_types_from_leaves()
+        except Exception:
+            derived = []
+
+    return jsonify(
+        {
+            "ok": True,
+            "results": results,
+            "winner": winner,
+            "explore": explore,
+            "derived": derived,
+        }
+    )
 
 
 @app.get("/api/debug/probe")
