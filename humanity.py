@@ -5,6 +5,7 @@ HTTP 200 as success. The status==1 body check that shifts needs does not
 apply here, since on a leave record "status" is the approval state.
 """
 
+import json
 import os
 import requests
 
@@ -128,6 +129,11 @@ def fetch_employees():
 
 
 LEAVE_TYPE_PATHS = [
+    "/leave_types",
+    "/leaves/leave_types",
+    "/leaves/leavetypes",
+    "/timeoff_types",
+    "/leaves/type",
     "/leaves/leavetype",
     "/leave/leavetype",
     "/leavetype",
@@ -152,6 +158,13 @@ EXPLORE_PATHS = [
 ]
 
 
+def _mask(text):
+    """Humanity echoes the access token back in some responses. Never show it."""
+    if TOKEN and text:
+        return text.replace(TOKEN, "***token hidden***")
+    return text
+
+
 def probe(path, params=None):
     """Raw call used by the diagnostics panel. Never raises, always reports."""
     result = {"path": path, "status": None, "ok": False, "error": None,
@@ -168,7 +181,7 @@ def probe(path, params=None):
         return result
 
     result["status"] = resp.status_code
-    body = resp.text or ""
+    body = _mask(resp.text or "")
     result["raw"] = body[:1200]
     if resp.status_code != 200:
         return result
@@ -181,7 +194,7 @@ def probe(path, params=None):
     rows = _normalize(payload)
     result["ok"] = True
     result["count"] = len(rows)
-    result["sample"] = rows[:3]
+    result["sample"] = json.loads(_mask(json.dumps(rows[:3])))
     return result
 
 
