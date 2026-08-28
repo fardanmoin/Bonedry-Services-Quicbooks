@@ -30,6 +30,27 @@ def get_roster(refresh=False):
     return _roster_cache["data"]
 
 
+def env_leavetype_map():
+    """Pinned jobcode to leave type ids from HUMANITY_LEAVETYPE_MAP.
+
+    Format: sick=542074,vacation=542073
+    Set it once in Render and the picker never appears again.
+    """
+    raw = os.environ.get("HUMANITY_LEAVETYPE_MAP", "").strip()
+    if not raw:
+        return {}
+    out = {}
+    for pair in raw.split(","):
+        if "=" not in pair:
+            continue
+        key, value = pair.split("=", 1)
+        key = key.strip().lower()
+        value = value.strip()
+        if key and value:
+            out[key] = value
+    return out
+
+
 def build_leavetype_map():
     """jobcode lowercased to Humanity leavetype id.
 
@@ -45,6 +66,9 @@ def build_leavetype_map():
     by_name = {t["name"].strip().lower(): t["id"] for t in types if t.get("name")}
     merged = dict(by_name)
     merged.update(saved)
+    # Pinned values win over anything derived, since a derived name can be
+    # ambiguous when two ids share it.
+    merged.update(env_leavetype_map())
     return merged, types
 
 
@@ -367,6 +391,48 @@ def debug_leavetypes():
             "derived": derived,
         }
     )
+
+
+@app.get("/api/debug/leaves-params")
+def debug_leaves_params():
+    """Find which parameters make /leaves return pending records.
+
+    /leaves appears to return approved records only by default, which breaks
+    duplicate detection for anything still awaiting approval.
+    """
+    wide = {"start_date": "2015-01-01", "end_date": "2035-12-31"}
+    variants = [
+        ("baseline", dict(wide)),
+        ("status=0", dict(wide, status="0")),
+        ("status=all", dict(wide, status="all")),
+        ("status=0,1", dict(wide, status="0,1")),
+        ("statuses=0", dict(wide, statuses="0")),
+        ("filter=pending", dict(wide, filter="pending")),
+        ("include_pending=1", dict(wide, include_pending="1")),
+        ("show_pending=1", dict(wide, show_pending="1")),
+        ("approved=0", dict(wide, approved="0")),
+        ("pending=1", dict(wide, pending="1")),
+        ("mode=all", dict(wide, mode="all")),
+        ("limit=200", dict(wide, limit="200")),
+    ]
+
+    results = []
+    for label, params in variants:
+        probe = humanity.probe("/leaves", params)
+        summary = {
+            "variant": label,
+            "status": probe["status"],
+            "count": probe["count"],
+            "error": probe["error"],
+            "ids": [],
+            "statuses": [],
+        }
+        for row in (probe.get("sample") or []):
+            summary["ids"].append(str(row.get("id")))
+            summary["statuses"].append(str(row.get("status")))
+        results.append(summary)
+
+    return jsonify({"ok": True, "results": results})
 
 
 @app.get("/api/debug/probe")
