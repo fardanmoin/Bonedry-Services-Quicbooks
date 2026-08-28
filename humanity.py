@@ -30,6 +30,25 @@ def _params():
     return {"access_token": TOKEN}
 
 
+def _check_envelope(payload, where):
+    """Humanity signals failure as HTTP 200 with status 0 and an error string.
+
+    Anything that only checks the HTTP code will read a failure as a success,
+    which is exactly how a row gets reported as created when nothing was.
+    """
+    if not isinstance(payload, dict):
+        return
+    if "status" not in payload:
+        return
+    try:
+        status = int(payload.get("status"))
+    except (TypeError, ValueError):
+        return
+    if status == 0:
+        message = payload.get("error") or payload.get("message") or "unknown error"
+        raise HumanityError("%s was refused by Humanity: %s" % (where, message))
+
+
 def _normalize(payload):
     """Humanity returns data as a list, a dict keyed by id, or {"items": [...]}.
 
@@ -60,9 +79,11 @@ def get(path, params=None):
     if resp.status_code != 200:
         raise HumanityError("GET %s returned %s: %s" % (path, resp.status_code, resp.text[:300]))
     try:
-        return _normalize(resp.json())
+        payload = resp.json()
     except ValueError:
         raise HumanityError("GET %s returned a non JSON body." % path)
+    _check_envelope(payload, "GET " + path)
+    return _normalize(payload)
 
 
 def post_form(path, form):
@@ -79,11 +100,14 @@ def post_form(path, form):
         BASE_URL + path, headers=_headers(), params=_params(), data=body, timeout=TIMEOUT
     )
     if resp.status_code not in (200, 201):
-        raise HumanityError("POST %s returned %s: %s" % (path, resp.status_code, resp.text[:300]))
+        raise HumanityError("POST %s returned %s: %s"
+                            % (path, resp.status_code, _mask(resp.text)[:300]))
     try:
-        return resp.json()
+        payload = resp.json()
     except ValueError:
         return {}
+    _check_envelope(payload, "POST " + path)
+    return payload
 
 
 def put_form(path, form):
@@ -99,11 +123,14 @@ def put_form(path, form):
         BASE_URL + path, headers=_headers(), params=_params(), data=body, timeout=TIMEOUT
     )
     if resp.status_code not in (200, 201):
-        raise HumanityError("PUT %s returned %s: %s" % (path, resp.status_code, resp.text[:300]))
+        raise HumanityError("PUT %s returned %s: %s"
+                            % (path, resp.status_code, _mask(resp.text)[:300]))
     try:
-        return resp.json()
+        payload = resp.json()
     except ValueError:
         return {}
+    _check_envelope(payload, "PUT " + path)
+    return payload
 
 
 def fetch_employees():
@@ -344,8 +371,14 @@ def create_leave(employee_id, leavetype_id, start_date, end_date, is_hourly=Fals
     if is_hourly:
         form["start_time"] = start_time
         form["end_time"] = end_time
-    payload = create_leave_response = post_form("/leaves", form)
-    return _extract_leave_id(payload), create_leave_response
+    payload = post_form("/leaves", form)
+    leave_id = _extract_leave_id(payload)
+    if not leave_id:
+        raise HumanityError(
+            "POST /leaves returned no leave id, so nothing was created. "
+            "Response: %s" % _mask(json.dumps(payload))[:300]
+        )
+    return leave_id, payload
 
 
 def update_leave(leave_id, unique_id=None, status=None, notes=None, comments=None,
