@@ -160,6 +160,32 @@ function Diagnostics(props) {
       })
     ) : e("div", { className: "empty" },
         "Run the check to see which path your account answers on."),
+    d && d.derived && d.derived.length
+      ? e("div", { style: { marginTop: "16px" } },
+          e("h2", null, "Leave types found in existing leave records"),
+          e("pre", { className: "raw" }, JSON.stringify(d.derived, null, 1))
+        )
+      : null,
+    d && d.explore && d.explore.length
+      ? e("div", { style: { marginTop: "16px" } },
+          e("h2", null, "What else this account answers on"),
+          e("div", { className: "ledger" },
+            d.explore.map(function (r, i) {
+              var kind = r.ok ? "create" : "failed";
+              return e("div", { className: "rowitem " + kind, key: "x" + i },
+                e("div", { className: "rowhead" },
+                  e("span", { className: "who" }, "GET " + r.path),
+                  e("span", { className: "tag " + kind },
+                    r.status === null ? "no response" : String(r.status))
+                ),
+                r.sample && r.sample.length
+                  ? e("pre", { className: "raw" }, JSON.stringify(r.sample, null, 1))
+                  : (r.raw ? e("pre", { className: "raw" }, r.raw) : null)
+              );
+            })
+          )
+        )
+      : null,
     d && d.winner
       ? e("div", { className: "warn", style: { marginTop: "12px" } },
           "\u2713 " + d.winner + " works. Set HUMANITY_LEAVETYPE_PATH to " + d.winner +
@@ -184,15 +210,24 @@ function JobcodeMapper(props) {
     props.unmapped.map(function (code) {
       return e("div", { className: "fixrow", key: code },
         e("span", { className: "who", style: { minWidth: "110px" } }, code),
-        e("select", {
-          value: props.overrides[code.toLowerCase()] || "",
-          onChange: function (ev) { props.onPick(code, ev.target.value); }
-        },
-          e("option", { value: "" }, "Pick a Humanity leave type"),
-          (props.leaveTypes || []).map(function (t) {
-            return e("option", { key: t.id, value: t.id }, t.name + " (" + t.id + ")");
-          })
-        )
+        (props.leaveTypes && props.leaveTypes.length)
+          ? e("select", {
+              value: props.overrides[code.toLowerCase()] || "",
+              onChange: function (ev) { props.onPick(code, ev.target.value); }
+            },
+              e("option", { value: "" }, "Pick a Humanity leave type"),
+              (props.leaveTypes || []).map(function (t) {
+                return e("option", { key: t.id, value: t.id }, t.name + " (" + t.id + ")");
+              })
+            )
+          : e("input", {
+              type: "text",
+              placeholder: "Leave type ID from Humanity",
+              defaultValue: props.overrides[code.toLowerCase()] || "",
+              onBlur: function (ev) {
+                if (ev.target.value.trim()) props.onPick(code, ev.target.value.trim());
+              }
+            })
       );
     })
   );
@@ -301,7 +336,10 @@ function App() {
     setDiagBusy(true);
     fetch("/api/debug/leavetypes")
       .then(function (r) { return r.json(); })
-      .then(function (d) { setDiag(d); })
+      .then(function (d) {
+        setDiag(d);
+        if (d.derived && d.derived.length) setLeaveTypes(d.derived);
+      })
       .catch(function (err) { setError(String(err)); })
       .finally(function () { setDiagBusy(false); });
   }
