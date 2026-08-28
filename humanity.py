@@ -244,7 +244,7 @@ def derive_leave_types_from_leaves():
     straight from the account, which is what the mapping actually needs.
     """
     try:
-        rows = get("/leaves")
+        rows = get("/leaves", {"start_date": "2015-01-01", "end_date": "2035-12-31"})
     except HumanityError:
         return []
 
