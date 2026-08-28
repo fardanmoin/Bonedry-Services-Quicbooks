@@ -484,14 +484,56 @@ def debug_dedupe():
             cursor = _next_day(cursor)
             guard += 1
 
+    # Characterise the whole result set, so we stop guessing what is missing.
+    statuses = {}
+    years = {}
+    latest = ""
+    earliest = "9999"
+    for row in raw:
+        s = str(row.get("status"))
+        statuses[s] = statuses.get(s, 0) + 1
+        start_ts = str(row.get("start_timestamp") or "")[:10]
+        if start_ts:
+            years[start_ts[:4]] = years.get(start_ts[:4], 0) + 1
+            latest = max(latest, start_ts)
+            earliest = min(earliest, start_ts)
+
+    # Does asking for one employee surface records the bulk call misses?
+    per_employee = {"tried": False}
+    employee_id = request.args.get("employee", "8588225")
+    if employee_id:
+        per_employee["tried"] = True
+        attempts = {}
+        for label, params in [
+            ("employee", {"employee": employee_id}),
+            ("employee+window", {"employee": employee_id,
+                                 "start_date": start, "end_date": end}),
+            ("employee+wide", {"employee": employee_id,
+                               "start_date": "2015-01-01", "end_date": "2035-12-31"}),
+        ]:
+            p = humanity.probe("/leaves", params)
+            attempts[label] = {
+                "status": p["status"],
+                "count": p["count"],
+                "ids": [str(r.get("id")) for r in (p.get("sample") or [])],
+                "statuses": [str(r.get("status")) for r in (p.get("sample") or [])],
+                "starts": [str(r.get("start_timestamp"))[:10] for r in (p.get("sample") or [])],
+            }
+        per_employee["attempts"] = attempts
+
     return jsonify(
         {
             "ok": True,
             "window": {"start": start, "end": end},
             "raw_total": len(raw),
+            "status_counts": statuses,
+            "records_by_year": years,
+            "earliest_start": earliest,
+            "latest_start": latest,
             "raw_in_window": near,
             "parsed_in_window": parsed,
             "dedupe_keys": sorted(set(keys)),
+            "per_employee": per_employee,
         }
     )
 
