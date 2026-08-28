@@ -5,8 +5,12 @@ that has to outlive a request lives here.
 """
 
 import os
-import psycopg2
-import psycopg2.extras
+
+try:
+    import psycopg2
+    import psycopg2.extras
+except ImportError:  # running without a database configured
+    psycopg2 = None
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
@@ -42,12 +46,14 @@ CREATE TABLE IF NOT EXISTS leavetype_mappings (
 
 
 def available():
-    return bool(DATABASE_URL)
+    return bool(DATABASE_URL) and psycopg2 is not None
 
 
 def connect():
     if not DATABASE_URL:
         raise RuntimeError("DATABASE_URL is not set on this service.")
+    if psycopg2 is None:
+        raise RuntimeError("psycopg2 is not installed on this service.")
     return psycopg2.connect(DATABASE_URL)
 
 
@@ -70,6 +76,8 @@ def load_employee_overrides():
 
 
 def save_employee_mapping(source_key, employee_id, label=None):
+    if not available():
+        return False
     with connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -95,6 +103,8 @@ def load_leavetype_map():
 
 
 def save_leavetype_mapping(jobcode, leavetype_id, label=None):
+    if not available():
+        return False
     with connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -123,6 +133,9 @@ def get_synced(unique_ids):
 
 
 def record_sync(item, leave_id):
+    """No op without a database. Deduplication falls back to asking Humanity."""
+    if not available():
+        return False
     with connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
