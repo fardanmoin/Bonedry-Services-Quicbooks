@@ -165,11 +165,18 @@ def _dedupe_from_humanity(items):
             continue
         key = (str(item["employee_id"]), str(item["leavetype_id"]), item["local_date"])
         match = seen.get(key)
-        if not match:
+        if match:
+            item["leave_id"] = match["id"]
+            item["action"] = "unchanged"
+            item["reason"] = "Humanity already has this leave for this person and date."
             continue
-        item["leave_id"] = match["id"]
-        item["action"] = "unchanged"
-        item["reason"] = "Humanity already has this leave for this person and date."
+        # GET /leaves returns approved records only, so a pending leave this
+        # tool created earlier is invisible here. Never claim this row is new.
+        item.setdefault("warnings", []).append(
+            "No database configured. Humanity only reports approved leaves, so a "
+            "pending one from an earlier run cannot be detected. Re-posting this "
+            "file may create a duplicate."
+        )
 
 
 def _next_day(date_string):
@@ -193,6 +200,7 @@ def health():
         {
             "ok": True,
             "database": db.available(),
+            "dedupe": "reliable" if db.available() else "approved leaves only",
             "humanity_token": bool(humanity.TOKEN),
         }
     )
