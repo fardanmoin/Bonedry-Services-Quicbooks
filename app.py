@@ -348,7 +348,11 @@ def debug_leavetypes():
     explore = []
     derived = []
     if not winner:
-        explore = [humanity.probe(p) for p in humanity.EXPLORE_PATHS]
+        wide = {"start_date": "2015-01-01", "end_date": "2035-12-31"}
+        explore = [
+            humanity.probe(p, wide if p in ("/leaves", "/leave", "/timeoff") else None)
+            for p in humanity.EXPLORE_PATHS
+        ]
         try:
             derived = humanity.derive_leave_types_from_leaves()
         except Exception:
