@@ -67,6 +67,14 @@ def analyze(raw):
 
     items = [matcher.classify(row, index, leavetype_map) for row in rows]
 
+    if db.available():
+        _dedupe_from_db(items)
+    else:
+        _dedupe_from_humanity(items)
+    return items, headers, leave_types
+
+
+def _dedupe_from_db(items):
     unique_ids = [i["unique_id"] for i in items if i["unique_id"]]
     already = db.get_synced(unique_ids)
     for item in items:
@@ -80,7 +88,60 @@ def analyze(raw):
         else:
             item["action"] = "unchanged"
             item["reason"] = "Already synced with the same approval state."
-    return items, headers, leave_types
+
+
+def _dedupe_from_humanity(items):
+    """No database, so ask Humanity what leave already exists in this window.
+
+    One call covers the whole file. If the lookup fails the rows are flagged
+    rather than posted, since posting blind is how duplicates happen.
+    """
+    dates = sorted([i["local_date"] for i in items if i.get("local_date")])
+    if not dates:
+        return
+    try:
+        existing = humanity.fetch_leaves(dates[0], dates[-1])
+    except humanity.HumanityError as exc:
+        for item in items:
+            if item["action"] == "create":
+                item["action"] = "skip"
+                item["reason"] = (
+                    "Could not read existing leaves to check for duplicates, so nothing "
+                    "posts. Add a database or fix the lookup first. Error: %s" % exc
+                )
+        return
+
+    seen = {}
+    for leave in existing:
+        cursor = leave["start_date"]
+        end = leave["end_date"] or leave["start_date"]
+        # Expand multi day leaves so a single day row matches inside one.
+        guard = 0
+        while cursor <= end and guard < 400:
+            seen[(leave["employee"], leave["leavetype"], cursor)] = leave
+            cursor = _next_day(cursor)
+            guard += 1
+
+    for item in items:
+        if item["action"] != "create":
+            continue
+        key = (str(item["employee_id"]), str(item["leavetype_id"]), item["local_date"])
+        match = seen.get(key)
+        if not match:
+            continue
+        item["leave_id"] = match["id"]
+        item["action"] = "unchanged"
+        item["reason"] = "Humanity already has this leave for this person and date."
+
+
+def _next_day(date_string):
+    from datetime import date, timedelta
+
+    try:
+        year, month, day = [int(p) for p in date_string.split("-")]
+        return str(date(year, month, day) + timedelta(days=1))
+    except Exception:
+        return "9999-12-31"
 
 
 @app.get("/")
