@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: leavesync
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --timeout 120 --workers 1
+    envVars:
+      - key: HUMANITY_TOKEN
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: HUMANITY_BASE_URL
+        value: https://www.humanity.com/api/v2
