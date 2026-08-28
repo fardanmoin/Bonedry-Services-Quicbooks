@@ -155,6 +155,40 @@ def fetch_leave_types():
     )
 
 
+def fetch_leaves(start_date, end_date):
+    """Existing leaves in a date window, used to dedupe when there is no database.
+
+    Humanity has a habit of ignoring query filters on list endpoints, so the
+    window is filtered again in Python rather than trusted.
+    """
+    rows = get("/leaves", {"start_date": start_date, "end_date": end_date})
+    out = []
+    for row in rows:
+        employee = row.get("employee") or row.get("employee_id") or row.get("user")
+        if isinstance(employee, dict):
+            employee = employee.get("id")
+        leavetype = row.get("leavetype") or row.get("leave_type") or row.get("type")
+        if isinstance(leavetype, dict):
+            leavetype = leavetype.get("id")
+        start = str(row.get("start_date") or row.get("start") or "")[:10]
+        end = str(row.get("end_date") or row.get("end") or start)[:10]
+        if not start:
+            continue
+        if end < start_date or start > end_date:
+            continue
+        out.append(
+            {
+                "id": str(row.get("id") or ""),
+                "employee": str(employee or ""),
+                "leavetype": str(leavetype or ""),
+                "start_date": start,
+                "end_date": end,
+                "status": row.get("status"),
+            }
+        )
+    return out
+
+
 def create_leave(employee_id, leavetype_id, start_date, end_date, is_hourly=False,
                  start_time=None, end_time=None):
     form = {
