@@ -128,13 +128,27 @@ def fetch_employees():
 
 
 LEAVE_TYPE_PATHS = [
-    "/leavetypes",
+    "/leaves/leavetype",
+    "/leave/leavetype",
+    "/leavetype",
+    "/staff/leavetypes",
+    "/employees/leavetypes",
+    "/timeoff/types",
+    "/timeoffs/types",
     "/leaves/types",
-    "/leave/types",
-    "/leaves/leavetypes",
-    "/company/leavetypes",
-    "/settings/leavetypes",
-    "/leaves/types/list",
+    "/leavetypes",
+]
+
+# Paths worth looking at when nothing above answers. These are probed by the
+# diagnostics panel only, to show what the account does expose.
+EXPLORE_PATHS = [
+    "/leaves",
+    "/leave",
+    "/timeoff",
+    "/employees",
+    "/settings",
+    "/company",
+    "/",
 ]
 
 
@@ -200,9 +214,42 @@ def fetch_leave_types():
             out.append({"id": str(type_id), "name": str(name)})
         if out:
             return out
+    derived = derive_leave_types_from_leaves()
+    if derived:
+        return derived
+
     raise HumanityError(
-        "Could not read leave types from any known path. Last error: %s" % last_error
+        "No leave type endpoint answered and no existing leave records to learn "
+        "from. Last error: %s" % last_error
     )
+
+
+def derive_leave_types_from_leaves():
+    """Fallback: read existing leave records and pull the distinct types out.
+
+    Less clean than a dedicated endpoint, but it gives real ids and names
+    straight from the account, which is what the mapping actually needs.
+    """
+    try:
+        rows = get("/leaves")
+    except HumanityError:
+        return []
+
+    found = {}
+    for row in rows:
+        type_id = row.get("leavetype") or row.get("leave_type") or row.get("type")
+        name = ""
+        if isinstance(type_id, dict):
+            name = type_id.get("name") or type_id.get("title") or ""
+            type_id = type_id.get("id")
+        if type_id is None:
+            continue
+        name = (name or row.get("leavetype_name") or row.get("type_name")
+                or row.get("leavetypename") or "")
+        key = str(type_id)
+        if key not in found or (name and not found[key]):
+            found[key] = str(name)
+    return [{"id": k, "name": v or ("Leave type " + k)} for k, v in sorted(found.items())]
 
 
 def fetch_leaves(start_date, end_date):
